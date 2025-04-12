@@ -1,5 +1,7 @@
 google-generativeai
 python-dotenv
 playwright
-# Adicionaremos groq/openai depois se necessário
-# Adicionaremos Selenium ou Playwright aqui em breve
+groq
+openai
+Selenium
+Playwright

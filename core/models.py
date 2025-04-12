@@ -309,7 +309,7 @@ class Crew:
         print(f"--- Tarefa Concluída: '{task.description}' por {agent.name} ---")
         return result
 
-    async def run(self, headless: bool = True):
+    async def run(self, headless: bool = True, task_interval_seconds: int = 0):
         """Executa todas as tarefas na ordem correta de dependência."""
         print("--- Iniciando execução da Crew (Modo LLM) ---")
         final_results = {} 

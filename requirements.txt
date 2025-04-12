@@ -1,0 +1,4 @@
+google-generativeai
+python-dotenv
+playwright
+# Adicionaremos Selenium ou Playwright aqui em breve

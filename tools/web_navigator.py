@@ -1,53 +1,61 @@
 import asyncio
-from playwright.async_api import async_playwright
-
-# Certifique-se de que a classe BaseTool está acessível.
-# Ajuste o import se a estrutura do seu projeto for diferente.
-# Se core/models.py estiver em um nível superior, pode ser necessário:
-# from ..core.models import BaseTool
-# Ou configure seu PYTHONPATH adequadamente.
-# Por simplicidade, assumindo execução a partir da raiz 'agentes-br':
+from playwright.async_api import async_playwright, Page, Error
+from typing import Optional
 from core.models import BaseTool
 
 class WebNavigatorTool(BaseTool):
-    """Ferramenta para navegar até uma URL usando Playwright."""
-
-    async def run(self, url: str) -> str:
-        """Abre um navegador, navega para a URL e fecha o navegador.
-
-        Args:
-            url: A URL para a qual navegar.
-
-        Returns:
-            Uma mensagem indicando sucesso ou falha na navegação.
-        """
+    """Navega para URL, reutilizando página se fornecida."""
+    async def run(self, url: str, page_instance: Optional[Page] = None) -> str:
         print(f"[WebNavigatorTool] Tentando navegar para: {url}")
-        browser = None # Inicializa browser como None
+        page_to_use: Optional[Page] = page_instance
+        browser_created_locally = False
+        playwright_context = None
+        local_browser = None
         try:
-            async with async_playwright() as p:
-                # Inicia o navegador (Chromium por padrão)
-                # headless=True significa que o navegador não será visível
-                # headless=False é útil para depuração
-                browser = await p.chromium.launch(headless=True)
-                page = await browser.new_page()
-
-                # Navega para a URL com um timeout aumentado para lidar com carregamentos lentos (ex: Render free tier)
-                await page.goto(url, timeout=90000) # Timeout de 90 segundos
-
-                page_title = await page.title()
-                print(f"[WebNavigatorTool] Navegação bem-sucedida. Título da página: {page_title}")
-
-                await browser.close()
-                return f"Navegação para {url} concluída com sucesso. Título: {page_title}"
+            if not page_to_use or page_to_use.is_closed():
+                print("[WebNavigatorTool] Criando navegador temporário.")
+                browser_created_locally = True
+                playwright_context = await async_playwright().start()
+                local_browser = await playwright_context.chromium.launch(headless=True)
+                page_to_use = await local_browser.new_page()
+                if not page_to_use: raise Error("Falha ao criar página.")
+            print(f"[WebNavigatorTool] Iniciando goto para {url} (wait_until='networkidle')")
+            await page_to_use.goto(url, timeout=90000, wait_until='networkidle')
+            print(f"[WebNavigatorTool] goto concluído. Esperando campo #empresa...")
+            await page_to_use.locator("#empresa").wait_for(state='visible', timeout=30000)
+            print(f"[WebNavigatorTool] Campo #empresa visível.")
+            page_title = await page_to_use.title()
+            result_message = f"Navegação para {url} OK. Título: {page_title}"
+            print(f"[WebNavigatorTool] {result_message}")
+            return result_message
+        except Error as pe:
+            error_message = f"Erro Playwright: {type(pe).__name__} - {str(pe)}"
+            print(f"[WebNavigatorTool] {error_message}")
+            return error_message
         except Exception as e:
-            print(f"[WebNavigatorTool] Erro ao navegar para {url}: {e}")
-            # Tenta fechar o navegador se ele foi iniciado e ocorreu um erro
-            if browser:
-                try:
-                    await browser.close()
-                except Exception as close_err:
-                    print(f"[WebNavigatorTool] Erro adicional ao tentar fechar o navegador: {close_err}")
-            return f"Erro ao tentar navegar para {url}: {str(e)}"
+            error_message = f"Erro Inesperado: {type(e).__name__} - {str(e)}"
+            print(f"[WebNavigatorTool] {error_message}")
+            return error_message
+        finally:
+            # Fecha o navegador SOMENTE se foi criado localmente nesta execução
+            if browser_created_locally:
+                print("[WebNavigatorTool] Fechando navegador temporário.")
+                # Corrigido: Bloco try/except indentado corretamente
+                if page_to_use and not page_to_use.is_closed():
+                    try:
+                        await page_to_use.close()
+                    except Exception:
+                        pass # Ignora erros ao fechar página temporária
+                if local_browser and local_browser.is_connected():
+                     try:
+                         await local_browser.close()
+                     except Exception:
+                         pass # Ignora erros ao fechar browser temporário
+                if playwright_context:
+                     try:
+                         await playwright_context.stop()
+                     except Exception:
+                         pass # Ignora erros ao parar contexto temporário
 
 # Exemplo de uso (para teste direto do arquivo, se necessário)
 async def test_navigation():

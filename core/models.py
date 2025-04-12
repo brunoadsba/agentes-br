@@ -1,8 +1,13 @@
 import asyncio
 import re # Import regex module
+import json
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, field
+import os
 import google.generativeai as genai
+from openai import AsyncOpenAI # Para OpenAI/DeepSeek (se reativado)
+from groq import AsyncGroq # Para Groq (se reativado)
+from playwright.async_api import async_playwright, Browser, Page
 
 # TODO: Adicionar ferramentas de interação web (Selenium/Playwright) aqui ou em tools/
 
@@ -42,9 +47,11 @@ class GeminiModel:
         self.top_k = top_k
         # TODO: Configurar API Key via config/setup.py ou .env
         # Exemplo: genai.configure(api_key="SUA_API_KEY")
+        print(f"[GeminiModel] Wrapper inicializado para {model_name}. Certifique-se que genai.configure() foi chamado.")
 
     async def generate(self, prompt: str) -> str:
         """Gera conteúdo usando o modelo Gemini configurado."""
+        print(f"[GeminiModel] Enviando prompt para Gemini...")
         try:
             # Simula latência para evitar rate limits e dar tempo para APIs externas
             await asyncio.sleep(0.5)
@@ -60,8 +67,9 @@ class GeminiModel:
             return response.text if hasattr(response, 'text') else str(response) # Retorna str(response) se .text não existir
         except Exception as e:
             # TODO: Implementar logging adequado
-            print(f"Erro na geração Gemini: {e}")
-            return f"Erro na geração: {str(e)}"
+            print(f"Erro na geração Gemini: {type(e).__name__} - {e}")
+            # Retorna o erro para ser tratado pela Crew/Agent
+            return f"Erro na geração Gemini: {str(e)}"
 
 # Interface base para ferramentas (Placeholder)
 class BaseTool:
@@ -70,14 +78,14 @@ class BaseTool:
 
 class Agent:
     """Representa um agente autônomo com um papel, modelo e ferramentas."""
-    def __init__(self, name: str, role: str, model: GeminiModel, tools: Optional[List[BaseTool]] = None, memory: Optional[ContextualMemory] = None):
+    def __init__(self, name: str, role: str, model, tools: Optional[List[BaseTool]] = None, memory: Optional[ContextualMemory] = None):
         self.name = name
         self.role = role
         self.model = model
-        self.tools = {tool.__class__.__name__: tool for tool in (tools or [])} # Mapeia nome da classe para instância
+        self.tools = {tool.__class__.__name__: tool for tool in (tools or []) if tool is not None}
         self.memory = memory
 
-    async def execute(self, input_text: str, dependencies_results: Optional[List[str]] = None) -> str:
+    async def execute(self, input_text: str, dependencies_results: Optional[List[str]] = None, page: Optional[Page] = None) -> str:
         """Executa uma tarefa: 1. LLM planeja qual ferramenta/parâmetro usar. 2. Executa ferramenta. 3. LLM resume."""
         print(f"[{self.name}] Iniciando tarefa: {input_text}")
 
@@ -103,52 +111,74 @@ class Agent:
             plan_prompt_parts.append(f"\n--- Resultados de Tarefas Anteriores ---\n{deps_str}")
 
         plan_prompt_parts.append(f"\n--- Tarefa Atual ---\n{input_text}")
-        # Instrução específica para planejamento e extração
+        # Instrução para formato JSON (importante)
         plan_prompt_parts.append(
             "\n--- Instrução ---\n"
-            "Com base na tarefa atual e no seu papel, qual ferramenta você deve usar (se alguma)? "
-            "Se for usar uma ferramenta, quais parâmetros EXATOS você deve passar para ela? "
-            "Para WebNavigatorTool, extraia apenas a URL. Responda APENAS com o nome da ferramenta e o parâmetro a ser usado, no formato: FERRAMENTA: PARAMETRO. "
+            "Com base na tarefa atual, seu papel e ferramentas, decida a próxima ação. "
+            "Responda APENAS com o nome da ferramenta e os parâmetros **como uma string JSON válida**: FERRAMENTA: {\"param1\": \"valor1\", ...}. "
+            "Exemplos: WebNavigatorTool: {\"url\": \"...\"}, WebInteractorTool: {\"action\": \"fill\", \"selector\": \"...\", \"value\": \"...\"}, WebInteractorTool: {\"action\": \"click\", \"selector\": \"...\"}, WebInteractorTool: {\"action\": \"select_option\", \"selector\": \"...\", \"label\": \"...\"}. "
             "Se nenhuma ferramenta for necessária, responda 'Nenhuma ferramenta'."
         )
         
         planning_prompt = "\n".join(plan_prompt_parts)
-        print(f"[{self.name}] Enviando prompt de planejamento para o LLM...")
+        print(f"[{self.name}] Enviando prompt de planejamento para o LLM ({self.model.__class__.__name__})...")
         llm_plan_response = await self.model.generate(planning_prompt)
         print(f"[{self.name}] Resposta do planejamento do LLM: {llm_plan_response}")
 
+        # Verifica se a resposta do LLM indica erro
+        if "Erro na geração" in llm_plan_response:
+             print(f"[{self.name}] Erro detectado na resposta do LLM. Abortando tarefa.")
+             # Armazena o erro na memória se aplicável
+             if self.memory: self.memory.store_individual(self.name, f"Tarefa: {input_text}\nErro LLM: {llm_plan_response}")
+             return llm_plan_response # Retorna o erro
+
         # --- Passo 2: Executar a ferramenta com base no plano --- 
-        tool_output = "Nenhuma ferramenta utilizada."
+        tool_output = "Nenhuma ferramenta utilizada ou necessária para esta tarefa."
         tool_used = None
-        tool_param = None
+        tool_params_dict = None
 
         if "Nenhuma ferramenta" not in llm_plan_response:
-            # Tenta extrair FERRAMENTA: PARAMETRO da resposta do LLM
-            match = re.match(r"\s*([\w\d_]+)\s*:\s*(.*)\s*", llm_plan_response, re.IGNORECASE)
+            match = re.match(r"\s*([^\s]+)\s*:\s*(\{.*?\})\s*", llm_plan_response, re.DOTALL | re.IGNORECASE)
             if match:
                 tool_name = match.group(1).strip()
-                tool_param = match.group(2).strip()
-                
+                tool_params_json = match.group(2).strip()
                 if tool_name in self.tools:
                     tool_to_run = self.tools[tool_name]
-                    print(f"[{self.name}] Executando ferramenta '{tool_name}' com parâmetro: '{tool_param}'")
                     try:
-                        # Assumindo que ferramentas esperam um único argumento posicional por enquanto
-                        # TODO: Adaptar para kwargs se ferramentas ficarem mais complexas
-                        tool_output = await tool_to_run.run(tool_param) 
+                        tool_params_dict = json.loads(tool_params_json)
+                        print(f"[{self.name}] Executando ferramenta '{tool_name}' com parâmetros: {tool_params_dict}")
+                        kwargs_for_tool = tool_params_dict.copy()
+
+                        if tool_name in ["WebInteractorTool", "WebNavigatorTool"]:
+                            if page:
+                                # Prepara argumentos específicos para ferramentas web
+                                if tool_name == "WebInteractorTool":
+                                    kwargs_for_tool = {"page": page, "action_details_json": tool_params_json}
+                                elif tool_name == "WebNavigatorTool":
+                                    # WebNavigatorTool espera 'url' e 'page_instance'
+                                    kwargs_for_tool = {"url": tool_params_dict.get("url"), "page_instance": page}
+                            else:
+                                tool_output = f"Erro: Ferramenta '{tool_name}' requer página ativa."
+                                raise Exception(tool_output) # Levanta exceção para bloco catch
+                        
+                        # Executa a ferramenta
+                        tool_output = await tool_to_run.run(**kwargs_for_tool)
                         tool_used = tool_name
-                        print(f"[{self.name}] Saída da ferramenta '{tool_name}': {tool_output[:150]}...")
+                        print(f"[{self.name}] Saída da ferramenta '{tool_name}': {tool_output[:150]}..." )
+                    except json.JSONDecodeError:
+                         tool_output = f"Erro: Falha ao decodificar JSON '{tool_params_json}' para '{tool_name}'."
+                         print(f"[{self.name}] {tool_output}")
                     except Exception as e:
-                        tool_output = f"Erro ao executar ferramenta {tool_name}: {str(e)}"
+                        tool_output = f"Erro ao executar '{tool_name}' com {tool_params_dict}: {type(e).__name__} - {str(e)}"
                         print(f"[{self.name}] {tool_output}")
                 else:
-                    tool_output = f"Erro: LLM sugeriu ferramenta desconhecida '{tool_name}'. Ferramentas disponíveis: {list(self.tools.keys())}"
+                    tool_output = f"Erro: LLM sugeriu ferramenta desconhecida '{tool_name}'."
                     print(f"[{self.name}] {tool_output}")
             else:
-                 tool_output = f"Erro: Não foi possível extrair 'FERRAMENTA: PARAMETRO' da resposta do LLM: '{llm_plan_response}'."
+                 tool_output = f"Erro: Formato inválido na resposta do LLM: '{llm_plan_response}'. Esperado 'FERRAMENTA: {{JSON}}'."
                  print(f"[{self.name}] {tool_output}")
         else:
-             print(f"[{self.name}] Nenhuma ferramenta será utilizada conforme planejado pelo LLM.")
+             print(f"[{self.name}] Nenhuma ferramenta utilizada conforme planejado.")
              
         # --- Passo 3: LLM resume o resultado --- 
         summary_prompt_parts = [
@@ -156,7 +186,7 @@ class Agent:
             f"Sua tarefa era: {input_text}"
         ]
         if tool_used:
-            summary_prompt_parts.append(f"Você usou a ferramenta '{tool_used}' com o parâmetro '{tool_param}'.")
+            summary_prompt_parts.append(f"Você usou a ferramenta '{tool_used}' com o parâmetro '{tool_params_dict}'.")
         summary_prompt_parts.append(f"O resultado da ação (ou da ferramenta) foi: {tool_output}")
         summary_prompt_parts.append(
             "\n--- Instrução ---\n"
@@ -181,11 +211,12 @@ class Agent:
 
         # Armazenar na memória
         if self.memory:
-            memory_entry = f"Tarefa: {input_text}\nAção: {tool_output}\nResultado: {final_response}"
+            memory_action = f"Ferramenta: {tool_used}, Params: {tool_params_dict}" if tool_used else "Nenhuma ferramenta usada"
+            memory_entry = f"Tarefa: {input_text}\nAção: {memory_action}\nResultado: {final_response}"
             self.memory.store_individual(self.name, memory_entry)
             self.memory.store_global(f"[{self.name}]: {final_response}")
 
-        print(f"[{self.name}] Tarefa concluída. Resultado: {final_response[:100]}...")
+        print(f"[{self.name}] Tarefa concluída. Resultado direto: {final_response[:150]}..." )
         return final_response
 
 @dataclass
@@ -200,7 +231,7 @@ class Task:
 
     def get_dependencies_results(self) -> List[str]:
         """Obtém os resultados das tarefas dependentes que já foram executadas."""
-        return [task.result for task in self.dependencies if task.result is not None]
+        return [task.result for task in self.dependencies if task.executed and task.result is not None and "Erro" not in str(task.result)]
 
     def __hash__(self):
         # Necessário para usar Task como chave em dicionários ou sets, se preciso
@@ -214,39 +245,90 @@ class Crew:
         self.tasks = tasks
         self._task_graph: Dict[Task, List[Task]] = {task: task.dependencies for task in tasks}
         self._task_results: Dict[Task, Any] = {} # Armazena resultados intermediários
+        self.browser: Optional[Browser] = None
+        self.page: Optional[Page] = None
+        self._playwright = None
+
+    async def setup_browser(self, headless: bool = True):
+        # ... (código setup_browser como implementado antes) ...
+        try:
+            print("[Crew] Configurando o navegador Playwright...")
+            self._playwright = await async_playwright().start()
+            self.browser = await self._playwright.chromium.launch(headless=headless)
+            self.page = await self.browser.new_page()
+            print("[Crew] Navegador e página configurados com sucesso.")
+        except Exception as e:
+            print(f"[Crew] Erro crítico ao configurar o navegador: {e}")
+            await self.close_browser()
+            raise
+
+    async def close_browser(self):
+        # ... (código close_browser como implementado antes) ...
+        print("[Crew] Fechando o navegador Playwright...")
+        if self.page and not self.page.is_closed():
+            try: await self.page.close(); print("[Crew] Página fechada.")
+            except Exception as e: print(f"[Crew] Erro ao fechar a página: {e}")
+        if self.browser and self.browser.is_connected():
+            try: await self.browser.close(); print("[Crew] Navegador fechado.")
+            except Exception as e: print(f"[Crew] Erro ao fechar o navegador: {e}")
+        if self._playwright:
+             try:
+                 await self._playwright.stop()
+                 print("[Crew] Playwright parado.")
+             except Exception as e: print(f"[Crew] Erro ao parar Playwright: {e}")
+        self.page = None; self.browser = None; self._playwright = None
+        print("[Crew] Limpeza do navegador concluída.")
 
     async def _execute_task(self, task: Task):
         """Executa uma única tarefa, garantindo que suas dependências foram concluídas."""
-        if task in self._task_results: # Já executada ou em execução
+        if task in self._task_results and task.executed and task.result is not None and "Erro" not in str(task.result):
+            print(f"[Crew] Reutilizando resultado da tarefa: {task.description}")
             return self._task_results[task]
-        if task.executed: # Segurança adicional
+        if task.executed and ("Erro" in str(task.result) or task.result is None):
+             print(f"[Crew] Tarefa já falhou anteriormente: {task.description}")
              return task.result
 
-        # Marca como "em execução" para detectar ciclos (embora não implementado aqui)
-        self._task_results[task] = None
-
-        # Espera pelas dependências
-        dependency_results = []
         if task.dependencies:
+            print(f"[Crew] Verificando dependências para a tarefa: {task.description}")
             dep_futures = [self._execute_task(dep) for dep in task.dependencies]
-            await asyncio.gather(*dep_futures) # Espera todas as dependências terminarem
-            dependency_results = task.get_dependencies_results() # Pega os resultados agora que terminaram
+            await asyncio.gather(*dep_futures)
+            # Verifica se ALGUMA dependência falhou
+            failed_dependencies = [dep.description for dep in task.dependencies if not dep.executed or (dep.result is not None and "Erro" in str(dep.result))]
+            if failed_dependencies:
+                 error_msg = f"Tarefa '{task.description}' não pode ser executada. Falha nas dependências: {failed_dependencies}"
+                 print(f"[Crew] {error_msg}")
+                 task.result = error_msg; task.executed = True; self._task_results[task] = error_msg
+                 return error_msg
+            print(f"[Crew] Dependências para '{task.description}' concluídas.")
 
-        # Executa a tarefa
         agent = self.agents[task.agent.name]
-        result = await agent.execute(task.description, dependency_results)
-        task.result = result
-        task.executed = True
-        self._task_results[task] = result # Armazena resultado final
-        print(f"--- Tarefa Concluída: {task.description} por {agent.name} ---")
+        print(f"[Crew] Executando tarefa: '{task.description}' pelo agente {agent.name}")
+        # Passa description e page
+        result = await agent.execute(input_text=task.description, dependencies_results=[], page=self.page)
+        task.result = result; task.executed = True; self._task_results[task] = result
+        print(f"--- Tarefa Concluída: '{task.description}' por {agent.name} ---")
         return result
 
-    async def run(self):
+    async def run(self, headless: bool = True):
         """Executa todas as tarefas na ordem correta de dependência."""
-        print("--- Iniciando execução da Crew ---")
-        # Executa todas as tarefas. O asyncio.gather garante o paralelismo onde possível.
-        # A lógica em _execute_task lida com as dependências sequenciais.
-        await asyncio.gather(*(self._execute_task(task) for task in self.tasks))
-        print("--- Execução da Crew Concluída ---")
-        # Retorna os resultados finais, se necessário
-        return {task.description: task.result for task in self.tasks} 
+        print("--- Iniciando execução da Crew (Modo LLM) ---")
+        final_results = {} 
+        try:
+            await self.setup_browser(headless=headless)
+            if not self.browser or not self.page:
+                 print("[Crew] Erro fatal: Navegador não configurado.")
+                 return None
+            
+            all_tasks_future = asyncio.gather(*(self._execute_task(task) for task in self.tasks))
+            await all_tasks_future
+            print("--- Execução das Tarefas Concluída ---")
+            # Usa description como chave para resultados finais
+            final_results = {task.description: self._task_results.get(task, "Erro: Tarefa não executada/sem resultado") for task in self.tasks}
+            return final_results
+        except Exception as e:
+             print(f"[Crew] Erro crítico durante a execução da Crew: {e}")
+             import traceback; traceback.print_exc()
+             return None
+        finally:
+            await self.close_browser()
+            print("--- Execução da Crew Finalizada (navegador fechado) ---") 

@@ -3,5 +3,9 @@ python-dotenv
 playwright
 groq
 openai
-Selenium
-Playwright
+selenium
+playwright
+qwen
+mystral
+openrouter
+claude

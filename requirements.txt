@@ -1,12 +1,5 @@
 google-generativeai
 python-dotenv
 playwright
-groq
 openai
-selenium
-qwen
-mistralai
 openrouter
-dashscope
-PyYAML==6.0
-ruamel.yaml==0.16.12

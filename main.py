@@ -3,9 +3,9 @@ import os
 import json
 from dotenv import load_dotenv
 
-# Módulos Principais (com GeminiModel)
+# Módulos Principais
 from core.models import Agent, Task, Crew, ContextualMemory
-# Import LLMManager
+# Importa LLMManager
 from core.llm_manager import LLMManager
 
 # Ferramentas Web
@@ -19,12 +19,12 @@ async def main(headless_mode: bool = True):
     # 1. Inicializar Componentes
     memory = ContextualMemory()
     try:
-        # Initialize LLMManager
+        # Inicializa o LLMManager
         llm_manager = LLMManager()
         if not llm_manager.clients:
             print("Erro: Nenhum cliente LLM foi inicializado com sucesso. Verifique as chaves de API no .env.")
             return
-    except Exception as e: # Catch potential errors during LLMManager initialization
+    except Exception as e: # Captura erros potenciais durante a inicialização do LLMManager
         print(f"Erro ao inicializar LLMManager: {e}")
         return
 
@@ -34,14 +34,14 @@ async def main(headless_mode: bool = True):
 
     # 3. Definir Agente
     executor_web = Agent(
-        name="ExecutorWeb", 
+        name="ExecutorWeb",
         role=(
             "Responsável por interagir com páginas web. Pode navegar (WebNavigatorTool) "
             "e interagir (WebInteractorTool - fill, click, select_option). "
             "Planeje sua ação e forneça parâmetros JSON para a ferramenta."
-        ), 
-        llm_manager=llm_manager, # Pass LLMManager instance
-        tools=[web_navigator, web_interactor], 
+        ),
+        llm_manager=llm_manager, # Passa a instância do LLMManager
+        tools=[web_navigator, web_interactor],
         memory=memory
     )
 
@@ -127,7 +127,7 @@ async def main(headless_mode: bool = True):
     else:
         print("Nenhum resultado retornado pela equipe ou ocorreu um erro fatal.")
 
-# Bloco __main__ com argparse (igual)
+# Bloco __main__ com argparse
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()

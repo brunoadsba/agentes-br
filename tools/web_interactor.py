@@ -27,11 +27,13 @@ class WebInteractorTool(BaseTool):
                 return f"Elemento '{selector}' clicado."
             
             elif action == "select_option":
-                label = params.get("label")
-                if label is None: return "Erro: Ação 'select_option' requer 'label' no JSON."
-                print(f"[WebInteractorTool] Selecionando '{label}' em '{selector}'")
-                await page.select_option(selector, label=label, timeout=30000)
-                return f"Opção '{label}' selecionada em '{selector}'."
+                # Aceita 'label' ou 'value' para seleção
+                label_to_select = params.get("label") or params.get("value") 
+                if label_to_select is None:
+                    return "Erro: Ação 'select_option' requer 'label' ou 'value' no JSON."
+                print(f"[WebInteractorTool] Selecionando '{label_to_select}' em '{selector}'")
+                await page.select_option(selector, label=label_to_select, timeout=30000)
+                return f"Opção '{label_to_select}' selecionada em '{selector}'."
             
             else:
                 return f"Erro: Ação '{action}' não suportada."

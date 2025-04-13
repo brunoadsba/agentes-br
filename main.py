@@ -3,31 +3,30 @@ import os
 import json
 from dotenv import load_dotenv
 
-# Configuração inicial (Gemini)
-from config.setup import configure_gemini 
-
 # Módulos Principais (com GeminiModel)
-from core.models import Agent, Task, Crew, ContextualMemory, GeminiModel
+from core.models import Agent, Task, Crew, ContextualMemory
+# Import LLMManager
+from core.llm_manager import LLMManager
 
 # Ferramentas Web
 from tools.web_navigator import WebNavigatorTool
 from tools.web_interactor import WebInteractorTool
 
 async def main(headless_mode: bool = True):
-    load_dotenv() 
-    if not configure_gemini():
-        print("Falha ao configurar a API do Gemini.")
-        return
-        
-    print(f"Iniciando o processo de agentes (LLM)... (Headless: {headless_mode})")
+    load_dotenv()
+    print(f"Iniciando o processo de agentes com LLM Manager... (Headless: {headless_mode})")
 
     # 1. Inicializar Componentes
     memory = ContextualMemory()
     try:
-        model = GeminiModel()
-    except Exception as e: # Captura genérica para erro de inicialização
-         print(f"Erro ao inicializar modelo Gemini: {e}") 
-         return
+        # Initialize LLMManager
+        llm_manager = LLMManager()
+        if not llm_manager.clients:
+            print("Erro: Nenhum cliente LLM foi inicializado com sucesso. Verifique as chaves de API no .env.")
+            return
+    except Exception as e: # Catch potential errors during LLMManager initialization
+        print(f"Erro ao inicializar LLMManager: {e}")
+        return
 
     # 2. Definir Ferramentas
     web_navigator = WebNavigatorTool()
@@ -41,7 +40,7 @@ async def main(headless_mode: bool = True):
             "e interagir (WebInteractorTool - fill, click, select_option). "
             "Planeje sua ação e forneça parâmetros JSON para a ferramenta."
         ), 
-        model=model, 
+        llm_manager=llm_manager, # Pass LLMManager instance
         tools=[web_navigator, web_interactor], 
         memory=memory
     )
@@ -113,7 +112,7 @@ async def main(headless_mode: bool = True):
     ]
     equipe = Crew(agents=[executor_web], tasks=lista_tarefas)
     
-    print("\nIniciando a execução da equipe com Gemini...")
+    print("\nIniciando a execução da equipe com LLM Manager...")
     resultados = await equipe.run(headless=headless_mode) 
     print("\nExecução da equipe concluída.")
 
@@ -122,7 +121,7 @@ async def main(headless_mode: bool = True):
     if resultados:
         for tarefa in lista_tarefas:
             # Acessa resultado usando a description como chave
-            resultado = resultados.get(tarefa.description, "Erro: Resultado não encontrado para esta descrição")
+            resultado = resultados.get(tarefa.description, "Error: Resultado não encontrado para esta descrição")
             print(f"- {tarefa.description}:")
             print(f"  Resultado: {resultado}") 
     else:

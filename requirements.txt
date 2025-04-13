@@ -4,8 +4,9 @@ playwright
 groq
 openai
 selenium
-playwright
 qwen
-mystral
+mistralai
 openrouter
-claude
+dashscope
+PyYAML==6.0
+ruamel.yaml==0.16.12

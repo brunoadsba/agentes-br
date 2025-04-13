@@ -4,10 +4,14 @@ import json
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, field
 import os
-import google.generativeai as genai
-from openai import AsyncOpenAI # Para OpenAI/DeepSeek (se reativado)
-from groq import AsyncGroq # Para Groq (se reativado)
+# Remove Gemini specific imports if no longer needed directly here
+# import google.generativeai as genai # Removed
+# from openai import AsyncOpenAI # Keep commented if needed elsewhere or for future clients
+# from groq import AsyncGroq # Keep commented if needed elsewhere or for future clients
 from playwright.async_api import async_playwright, Browser, Page
+
+# Import LLMManager
+from .llm_manager import LLMManager # Assuming llm_manager is in the same directory
 
 # TODO: Adicionar ferramentas de interação web (Selenium/Playwright) aqui ou em tools/
 
@@ -39,49 +43,17 @@ class ContextualMemory:
         """Recupera a memória global."""
         return self.global_data
 
-class GeminiModel:
-    """Wrapper para interação com o modelo Gemini do Google Generative AI."""
-    def __init__(self, model_name: str = "gemini-1.5-flash", temperature: float = 0.7, top_k: int = 40):
-        self.model = genai.GenerativeModel(model_name)
-        self.temperature = temperature
-        self.top_k = top_k
-        # TODO: Configurar API Key via config/setup.py ou .env
-        # Exemplo: genai.configure(api_key="SUA_API_KEY")
-        print(f"[GeminiModel] Wrapper inicializado para {model_name}. Certifique-se que genai.configure() foi chamado.")
-
-    async def generate(self, prompt: str) -> str:
-        """Gera conteúdo usando o modelo Gemini configurado."""
-        print(f"[GeminiModel] Enviando prompt para Gemini...")
-        try:
-            # Simula latência para evitar rate limits e dar tempo para APIs externas
-            await asyncio.sleep(0.5)
-            response = self.model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=self.temperature,
-                    top_k=self.top_k
-                )
-            )
-            # TODO: Adicionar tratamento mais robusto para possíveis erros de API ou conteúdo bloqueado
-            # Tenta extrair o conteúdo de 'text' ou lida com a falta dele
-            return response.text if hasattr(response, 'text') else str(response) # Retorna str(response) se .text não existir
-        except Exception as e:
-            # TODO: Implementar logging adequado
-            print(f"Erro na geração Gemini: {type(e).__name__} - {e}")
-            # Retorna o erro para ser tratado pela Crew/Agent
-            return f"Erro na geração Gemini: {str(e)}"
-
 # Interface base para ferramentas (Placeholder)
 class BaseTool:
     async def run(self, *args, **kwargs) -> str:
         raise NotImplementedError("Subclasses devem implementar o método run.")
 
 class Agent:
-    """Representa um agente autônomo com um papel, modelo e ferramentas."""
-    def __init__(self, name: str, role: str, model, tools: Optional[List[BaseTool]] = None, memory: Optional[ContextualMemory] = None):
+    """Representa um agente autônomo com um papel, LLM manager e ferramentas."""
+    def __init__(self, name: str, role: str, llm_manager: LLMManager, tools: Optional[List[BaseTool]] = None, memory: Optional[ContextualMemory] = None):
         self.name = name
         self.role = role
-        self.model = model
+        self.llm_manager = llm_manager # Store the LLMManager instance
         self.tools = {tool.__class__.__name__: tool for tool in (tools or []) if tool is not None}
         self.memory = memory
 
@@ -121,12 +93,12 @@ class Agent:
         )
         
         planning_prompt = "\n".join(plan_prompt_parts)
-        print(f"[{self.name}] Enviando prompt de planejamento para o LLM ({self.model.__class__.__name__})...")
-        llm_plan_response = await self.model.generate(planning_prompt)
+        print(f"[{self.name}] Enviando prompt de planejamento para o LLM via Manager...")
+        llm_plan_response = await self.llm_manager.generate(planning_prompt)
         print(f"[{self.name}] Resposta do planejamento do LLM: {llm_plan_response}")
 
         # Verifica se a resposta do LLM indica erro
-        if "Erro na geração" in llm_plan_response:
+        if "Error:" in llm_plan_response or "Erro na geração" in llm_plan_response:
              print(f"[{self.name}] Erro detectado na resposta do LLM. Abortando tarefa.")
              # Armazena o erro na memória se aplicável
              if self.memory: self.memory.store_individual(self.name, f"Tarefa: {input_text}\nErro LLM: {llm_plan_response}")
@@ -206,8 +178,8 @@ class Agent:
                  summary_prompt_parts.insert(2, f"\n--- Histórico Global Recente ---\n{global_history_str}")
         
         summary_prompt = "\n".join(summary_prompt_parts)
-        print(f"[{self.name}] Enviando prompt de resumo para o LLM...")
-        final_response = await self.model.generate(summary_prompt)
+        print(f"[{self.name}] Enviando prompt de resumo para o LLM via Manager...")
+        final_response = await self.llm_manager.generate(summary_prompt)
 
         # Armazenar na memória
         if self.memory:
@@ -231,7 +203,7 @@ class Task:
 
     def get_dependencies_results(self) -> List[str]:
         """Obtém os resultados das tarefas dependentes que já foram executadas."""
-        return [task.result for task in self.dependencies if task.executed and task.result is not None and "Erro" not in str(task.result)]
+        return [task.result for task in self.dependencies if task.executed and task.result is not None and not str(task.result).startswith("Error:")]
 
     def __hash__(self):
         # Necessário para usar Task como chave em dicionários ou sets, se preciso
@@ -281,10 +253,10 @@ class Crew:
 
     async def _execute_task(self, task: Task):
         """Executa uma única tarefa, garantindo que suas dependências foram concluídas."""
-        if task in self._task_results and task.executed and task.result is not None and "Erro" not in str(task.result):
+        if task in self._task_results and task.executed and task.result is not None and not str(task.result).startswith("Error:"):
             print(f"[Crew] Reutilizando resultado da tarefa: {task.description}")
             return self._task_results[task]
-        if task.executed and ("Erro" in str(task.result) or task.result is None):
+        if task.executed and (str(task.result).startswith("Error:") or task.result is None):
              print(f"[Crew] Tarefa já falhou anteriormente: {task.description}")
              return task.result
 
@@ -293,9 +265,9 @@ class Crew:
             dep_futures = [self._execute_task(dep) for dep in task.dependencies]
             await asyncio.gather(*dep_futures)
             # Verifica se ALGUMA dependência falhou
-            failed_dependencies = [dep.description for dep in task.dependencies if not dep.executed or (dep.result is not None and "Erro" in str(dep.result))]
+            failed_dependencies = [dep.description for dep in task.dependencies if not dep.executed or (dep.result is not None and str(dep.result).startswith("Error:"))]
             if failed_dependencies:
-                 error_msg = f"Tarefa '{task.description}' não pode ser executada. Falha nas dependências: {failed_dependencies}"
+                 error_msg = f"Error: Tarefa '{task.description}' não pode ser executada. Falha nas dependências: {failed_dependencies}"
                  print(f"[Crew] {error_msg}")
                  task.result = error_msg; task.executed = True; self._task_results[task] = error_msg
                  return error_msg
@@ -304,14 +276,15 @@ class Crew:
         agent = self.agents[task.agent.name]
         print(f"[Crew] Executando tarefa: '{task.description}' pelo agente {agent.name}")
         # Passa description e page
-        result = await agent.execute(input_text=task.description, dependencies_results=[], page=self.page)
+        dependency_results = task.get_dependencies_results()
+        result = await agent.execute(input_text=task.description, dependencies_results=dependency_results, page=self.page)
         task.result = result; task.executed = True; self._task_results[task] = result
         print(f"--- Tarefa Concluída: '{task.description}' por {agent.name} ---")
         return result
 
     async def run(self, headless: bool = True):
-        """Executa todas as tarefas na ordem correta de dependência."""
-        print("--- Iniciando execução da Crew (Modo LLM) ---")
+        """Executa todas as tarefas em ordem sequencial, respeitando dependências."""
+        print("--- Iniciando execução da Crew (Modo Sequencial) ---") # Updated mode in message
         final_results = {} 
         try:
             await self.setup_browser(headless=headless)
@@ -319,11 +292,21 @@ class Crew:
                  print("[Crew] Erro fatal: Navegador não configurado.")
                  return None
             
-            all_tasks_future = asyncio.gather(*(self._execute_task(task) for task in self.tasks))
-            await all_tasks_future
-            print("--- Execução das Tarefas Concluída ---")
+            # Execute tasks sequentially using a simple loop
+            print("[Crew] Executando tarefas sequencialmente...")
+            for task in self.tasks:
+                print(f"\n[Crew] Iniciando processamento da tarefa: {task.description}")
+                await self._execute_task(task)
+                # Optional: Add a small delay between tasks if needed
+                # await asyncio.sleep(0.1)
+                if str(self._task_results.get(task)).startswith("Error:"):
+                    print(f"[Crew] Parando execução devido a erro na tarefa: {task.description}")
+                    # Decide if you want to break or continue executing other independent tasks
+                    # break # Uncomment to stop execution on first error
+            
+            print("\n--- Execução das Tarefas Concluída ---")
             # Usa description como chave para resultados finais
-            final_results = {task.description: self._task_results.get(task, "Erro: Tarefa não executada/sem resultado") for task in self.tasks}
+            final_results = {task.description: self._task_results.get(task, "Error: Tarefa não executada/sem resultado") for task in self.tasks}
             return final_results
         except Exception as e:
              print(f"[Crew] Erro crítico durante a execução da Crew: {e}")

@@ -84,4 +84,7 @@ test-results/
 
 # Generated Files
 *.pdf
-*.log 
+*.log
+
+# Diretório de apoio com código externo
+external_site/ 

@@ -1,135 +1,115 @@
-# Projeto Agentes Autônomos com LLMs
+# Agentes BR 🤖
 
-Este projeto demonstra a criação e orquestração de agentes autônomos baseados em LLMs (Large Language Models) para realizar tarefas complexas, focando na automação de interações web utilizando a biblioteca Playwright. O sistema é projetado para ser extensível, permitindo a integração de diferentes modelos de LLM e ferramentas customizadas.
+Sistema de agentes autônomos em português brasileiro para automação de tarefas com múltiplos LLMs.
 
-## ✨ Funcionalidades Principais
+## 🔍 Visão Geral
 
-*   **Gerenciamento Flexível de LLMs:** Suporte integrado para múltiplos provedores de LLM através de um `LLMManager` (atualmente Gemini e OpenRouter).
-*   **Arquitetura de Agentes:** Modelo baseado em Agentes, Tarefas e Equipes (Crew) para organizar e executar fluxos de trabalho.
-*   **Interação Web Robusta:** Ferramentas para navegação (`WebNavigatorTool`) e interação (`WebInteractorTool`) com páginas web (preenchimento de formulários, cliques, seleção de opções) usando Playwright.
-*   **Execução Orquestrada:** Gerenciamento da execução sequencial de tarefas com tratamento de dependências entre elas.
-*   **Memória Contextual:** Implementação básica de memória de curto prazo individual e global para os agentes.
-*   **Configuração via `.env`:** Gerenciamento seguro de chaves de API e outras configurações.
+Este projeto implementa um sistema de agentes inteligentes capaz de:
+*   Executar tarefas complexas usando diferentes modelos de linguagem (OpenRouter, Groq, Gemini).
+*   Automatizar a interação com aplicações web usando Playwright.
+*   Gerenciar memória contextual para tarefas longas.
+*   Otimizar prompts e o uso de tokens para melhor custo-benefício.
+*   Trabalhar totalmente em português 🇧🇷.
 
+**Exemplo Principal:** O script `main.py` demonstra a automação do preenchimento de um formulário de orçamento na aplicação web [Sistema de Precificação](https://precificacao-sistema.onrender.com/) e o download do PDF resultante.
 
-## 🛠️ Tecnologias Utilizadas
+## ⚙️ Requisitos
 
-*   Python 3.x
-*   Playwright (para automação de navegador)
-*   Google Generative AI (API do Gemini)
-*   OpenRouter (API para múltiplos LLMs)
-*   Python-Dotenv (para carregar variáveis de ambiente)
-
-## 📂 Estrutura do Projeto
-
-```
-.
-├── core/               # Núcleo da lógica de agentes, tarefas, LLMs
-│   ├── __init__.py
-│   ├── llm_manager.py  # Gerenciador de clientes LLM
-│   └── models.py       # Definições de Agent, Task, Crew, ContextualMemory, BaseTool
-├── tools/              # Ferramentas reutilizáveis para os agentes
-│   ├── __init__.py
-│   ├── web_interactor.py # Ferramenta para interagir com elementos web
-│   └── web_navigator.py  # Ferramenta para navegar em páginas web
-├── tests/              # Testes unitários ou de integração
-│   └── test_llm_clients.py # Testes para os clientes LLM configurados
-├── .env                # Arquivo para armazenar chaves de API (NÃO versionado)
-├── .gitignore          # Arquivos e diretórios ignorados pelo Git
-├── main.py             # Ponto de entrada principal da aplicação
-├── README.md           # Este arquivo
-└── requirements.txt    # Dependências do projeto Python
-```
+*   Python 3.8+
+*   Chaves de API para os LLMs desejados (OpenRouter, Groq, Google Gemini) configuradas no arquivo `.env`.
+*   Dependências listadas em `requirements.txt`.
 
 ## 🚀 Instalação
 
-1.  **Clone o repositório:**
+1.  Clone o repositório:
     ```bash
-    git clone <url-do-seu-repositorio>
-    cd <nome-do-diretorio>
+    git clone <repo-url>
+    cd agentes-br
     ```
 
-2.  **Crie e ative um ambiente virtual:**
+2.  Crie um ambiente virtual (recomendado):
     ```bash
     python -m venv .venv
-    # Linux/macOS
-    source .venv/bin/activate
-    # Windows (cmd/powershell)
-    .venv\Scripts\activate
+    source .venv/bin/activate  # Linux/macOS
+    # OU
+    # .venv\\Scripts\\activate  # Windows
     ```
 
-3.  **Instale as dependências:**
+3.  Instale as dependências:
     ```bash
     pip install -r requirements.txt
     ```
 
-4.  **Instale os navegadores do Playwright:** (O Chromium é usado por padrão no código)
+4.  Configure as variáveis de ambiente:
     ```bash
-    playwright install --with-deps chromium
+    # Crie um arquivo .env na raiz do projeto
+    # Adicione suas chaves de API, por exemplo:
+    # GOOGLE_API_KEY=SUA_CHAVE_GEMINI
+    # GROQ_API_KEY=SUA_CHAVE_GROQ
+    # OPENROUTER_API_KEY=SUA_CHAVE_OPENROUTER
     ```
 
-## ⚙️ Configuração
-
-1.  **Crie o arquivo `.env`:**
-    Copie ou renomeie `.env.example` (se existir) ou crie um novo arquivo chamado `.env` na raiz do projeto.
-
-2.  **Adicione suas chaves de API:**
-    Abra o arquivo `.env` e adicione as chaves necessárias para os LLMs que você pretende usar:
-    ```dotenv
-    # Chave para a API do Google Gemini
-    GEMINI_API_KEY=SUA_CHAVE_GEMINI_AQUI
-
-    # Chave para a API do OpenRouter (usada para Groq e outros modelos)
-    OPENROUTER_API_KEY=SUA_CHAVE_OPENROUTER_AQUI
-
-    # Chave específica para o Grok via OpenRouter (opcional, se usar o teste específico)
-    GROK_API_KEY=SUA_CHAVE_GROK_OU_OPENROUTER_AQUI 
-    ```
-    *Substitua `SUA_CHAVE_..._AQUI` pelas suas chaves reais.*
-
-## ▶️ Uso
-
-### Executando o Exemplo Principal
-
-O arquivo `main.py` contém um exemplo que demonstra a automação do preenchimento de um formulário no site `https://precificacao-sistema.onrender.com/`.
-
-*   **Para executar em modo headless (sem interface gráfica):**
+5.  Instale os navegadores para o Playwright:
     ```bash
-    python main.py
+    playwright install chromium
     ```
 
-*   **Para executar com o navegador visível:**
-    ```bash
-    python main.py --no-headless
-    ```
+## ✨ Características Principais
 
-### Executando os Testes de LLM
+*   **Múltiplos LLMs:** Suporte para OpenRouter, Groq e Gemini com fallbacks automáticos (`core/llm_manager.py`).
+*   **Otimização de Tokens/Prompts:** Cálculo, truncamento e otimização de prompts para limites de contexto (`core/prompt_utils.py`).
+*   **Memória Contextual:** Armazenamento e sumarização de histórico com LLM (`core/memory.py`).
+*   **Ferramentas Web:** Navegação (`tools/web_navigator.py`) e Interação (`tools/web_interactor.py`) com Playwright.
+*   **Orquestração:** Definição de Agentes, Tarefas e execução em sequência com a `Crew` (`core/models.py`).
 
-O arquivo `tests/test_llm_clients.py` verifica a comunicação com os LLMs configurados (atualmente Grok e Optimus Alpha via OpenRouter).
+## 💻 Utilização
+
+O ponto de entrada principal é `main.py`. Ele está configurado para automatizar a geração de orçamento na aplicação web de precificação.
+
+Execute o script:
 
 ```bash
-python tests/test_llm_clients.py
+python main.py
 ```
-*(Certifique-se de que as chaves de API correspondentes estejam no seu arquivo `.env`)*
 
-## 📝 Exemplo de Fluxo (`main.py`)
+Por padrão, ele roda em modo *headless* (sem abrir a janela do navegador). Para ver o navegador em ação, use:
 
-1.  O `LLMManager` é inicializado, carregando os clientes LLM configurados via `.env`.
-2.  Um agente (`ExecutorWeb`) é definido com o papel de interagir com a web, utilizando o `LLMManager` e as ferramentas `WebNavigatorTool` e `WebInteractorTool`.
-3.  Uma série de tarefas é definida:
-    *   Navegar para a URL alvo.
-    *   Preencher os campos do formulário (Empresa, Email, Telefone) usando seletores CSS.
-    *   Clicar no botão "Adicionar Serviço".
-    *   Selecionar um serviço específico em um dropdown.
-    *   *(Tarefas futuras poderiam incluir selecionar outras opções e submeter o formulário)*
-4.  Uma `Crew` é criada com o agente e as tarefas.
-5.  A `Crew` executa as tarefas sequencialmente, usando o Playwright para controlar o navegador. O agente usa o LLM para decidir qual ação tomar (navegar, preencher, clicar, selecionar) e extrair/formatar os parâmetros para as ferramentas.
-6.  Os resultados de cada tarefa são impressos no final.
+```bash
+python main.py --no-headless
+```
+
+### Saída
+
+O script executará as tarefas definidas e, se bem-sucedido, salvará o arquivo PDF do orçamento gerado na pasta `output/`. Os logs detalhados da execução são exibidos no terminal.
+
+## 📁 Estrutura do Projeto
+
+```
+agentes-br/
+├── core/             # Núcleo do sistema de agentes, LLM, memória, prompts
+├── tools/            # Ferramentas de interação web (Playwright)
+├── external_site/    # Código-fonte da aplicação web de precificação (para referência)
+│   └── Precificacao-Sistema/
+├── output/           # Pasta onde os PDFs gerados são salvos
+├── tests/            # Testes unitários e de integração
+├── .env              # Arquivo para chaves de API (NÃO versionar)
+├── main.py           # Ponto de entrada principal (Exemplo de automação)
+├── requirements.txt  # Dependências do projeto
+└── README.md         # Este arquivo
+```
+
+## 🧪 Testes
+
+Execute os testes com:
+
+```bash
+pytest
+```
 
 ## 🤝 Contribuição
 
 Contribuições são bem-vindas! Sinta-se à vontade para abrir issues ou pull requests.
 
-## 📜 Licença
+## 📄 Licença
 
-[Defina a licença do seu projeto aqui, por exemplo: MIT License] 
+MIT

@@ -146,10 +146,8 @@ class LLMManager:
     def __init__(self):
         load_dotenv()
         self.clients = []
-        self._client_cycle = None
         self._initialize_clients()
         if self.clients:
-            self._client_cycle = cycle(self.clients)
             # Mensagem em português e lista clientes inicializados
             print(f"[LLMManager] Inicializado com {len(self.clients)} clientes: {[c.__class__.__name__ for c in self.clients]}")
         else:
@@ -220,30 +218,73 @@ class LLMManager:
         # Blocos de inicialização removidos para OpenAI, Anthropic, Mistral, Qwen
 
     async def generate(self, prompt: str) -> str:
-        """Seleciona o próximo cliente usando round-robin e gera conteúdo."""
-        if not self._client_cycle:
+        """Seleciona o próximo cliente usando round-robin e gera conteúdo, com retentativa em caso de erros recuperáveis."""
+        if not self.clients:
              # Mensagem em português
             return "Erro: Nenhum cliente LLM disponível."
 
-        selected_client = next(self._client_cycle)
-        client_name = selected_client.__class__.__name__
-        model_name = selected_client.model_name
-         # Mensagem em português
-        print(f"[LLMManager] Roteando para cliente: {client_name} (Modelo: {model_name})")
+        available_clients = list(self.clients)
+        clients_tried_count = 0
+        last_error = "Nenhum erro registrado."
 
-        try:
-            response = await selected_client.generate(prompt)
-            # Verificação básica de mensagens de erro retornadas pelo método generate do cliente
-            if isinstance(response, str) and (response.startswith("Erro:") or response.startswith("Aviso:")):
-                 # Mensagem em português
-                print(f"[LLMManager] Cliente {client_name} retornou um erro/aviso: {response}")
-                # Opcionalmente, implementar retentativa com próximo cliente aqui
-                # return await self.generate(prompt) # Retentativa imediata simples (pode causar loops)
-            return response
-        except Exception as e:
-             # Mensagem em português
-            print(f"[LLMManager] Exceção durante geração com {client_name} ({model_name}): {e}")
-            # Opcionalmente: tentar o próximo cliente ou apenas retornar o erro
-            return f"Erro ao gerar com {client_name}: {str(e)}"
+        start_index = getattr(self, '_last_client_index', -1) + 1
+        if start_index >= len(available_clients):
+            start_index = 0
+
+        while clients_tried_count < len(available_clients):
+            current_index = (start_index + clients_tried_count) % len(available_clients)
+            selected_client = available_clients[current_index]
+
+            client_name = selected_client.__class__.__name__
+            model_name = selected_client.model_name
+            print(f"[LLMManager] Tentando cliente: {client_name} (Modelo: {model_name}) - Tentativa {clients_tried_count + 1}/{len(available_clients)}")
+            clients_tried_count += 1
+
+            try:
+                response = await selected_client.generate(prompt)
+                is_error_response = isinstance(response, str) and response.startswith("Erro:")
+                is_retryable_error = False
+
+                if is_error_response:
+                    last_error = response
+                    if "403" in response or "Access denied" in response: # Erro específico do Groq/VPN
+                        print(f"[LLMManager] Alerta: Erro 403 (Acesso Negado) com {client_name}. Verifique restrições de rede ou desative VPNs se estiver usando uma.")
+                        is_retryable_error = True
+                    elif "429" in response: # Too Many Requests
+                        is_retryable_error = True
+                        print(f"[LLMManager] Erro 429 (Limite de Taxa) detectado com {client_name}.")
+                    elif any(code in response for code in ["500", "502", "503", "504"]): # Server errors
+                        is_retryable_error = True
+                        print(f"[LLMManager] Erro de servidor (5xx) detectado com {client_name}.")
+                    elif "network error" in response.lower() or "connection error" in response.lower():
+                         is_retryable_error = True
+                         print(f"[LLMManager] Erro de rede detectado com {client_name}.")
+
+                if not is_error_response:
+                    self._last_client_index = current_index
+                    print(f"[LLMManager] Sucesso com {client_name} (Modelo: {model_name}).")
+                    return response
+                elif is_retryable_error:
+                    print(f"[LLMManager] Cliente {client_name} falhou com erro recuperável. Tentando próximo cliente...")
+                    await asyncio.sleep(0.2)
+                    continue
+                else:
+                    print(f"[LLMManager] Cliente {client_name} retornou erro não recuperável: {response}")
+                    last_error = response
+                    continue
+
+            except Exception as e:
+                last_error = f"Exceção com {client_name}: {type(e).__name__} - {str(e)}"
+                print(f"[LLMManager] {last_error}")
+                if clients_tried_count < len(available_clients):
+                    print(f"[LLMManager] Tentando próximo cliente devido à exceção...")
+                    await asyncio.sleep(0.2)
+                    continue
+                else:
+                    print(f"[LLMManager] Exceção ocorreu na última tentativa com {client_name}.")
+
+        final_error_msg = f"Erro: Todos os {len(self.clients)} clientes LLM falharam após tentativas. Último erro registrado: {last_error}"
+        print(f"[LLMManager] {final_error_msg}")
+        return final_error_msg
 
 # Código de teste removido (movido para tests/test_llm_clients.py) 

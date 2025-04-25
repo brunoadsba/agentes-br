@@ -3,3 +3,10 @@ python-dotenv
 playwright
 openai
 openrouter
+tiktoken
+groq
+httpx>=0.24.0
+tenacity>=8.2.0
+pytest
+pytest-asyncio
+logging
